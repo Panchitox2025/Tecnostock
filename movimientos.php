@@ -1,23 +1,19 @@
 <?php
-session_start();
-if (!isset($_SESSION['id_usuario'])) {
-    header('Location: login.php');
-    exit;
-}
+
+require 'funciones.php';
+exigir_sesion();
 require 'conexion.php';
 
 $errores = [];
-$ok      = '';
-$vacio   = ['id_producto' => '', 'tipo' => 'entrada', 'cantidad' => '', 'observacion' => ''];
-$form    = $vacio;
+$form    = ['id_producto' => $_GET['producto'] ?? '', 'tipo' => 'entrada', 'cantidad' => '', 'observacion' => ''];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $form['id_producto']  = $_POST['id_producto'] ?? '';
-    $form['tipo']         = $_POST['tipo'] ?? '';
-    $form['cantidad']     = $_POST['cantidad'] ?? '';
-    $form['observacion']  = trim($_POST['observacion'] ?? '');
+    $form['id_producto'] = $_POST['id_producto'] ?? '';
+    $form['tipo']        = $_POST['tipo'] ?? '';
+    $form['cantidad']    = trim($_POST['cantidad'] ?? '');
+    $form['observacion'] = trim($_POST['observacion'] ?? '');
 
-    // Validaciones en el servidor
+
     $idProducto = filter_var($form['id_producto'], FILTER_VALIDATE_INT);
     $cantidad   = filter_var($form['cantidad'], FILTER_VALIDATE_INT);
 
@@ -33,9 +29,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!$errores) {
         try {
+        
             $pdo->beginTransaction();
 
-            // Bloquea la fila del producto mientras se procesa el movimiento
+        
             $stmt = $pdo->prepare('SELECT stock_actual FROM producto WHERE id_producto = ? AND estado = 1 FOR UPDATE');
             $stmt->execute([$idProducto]);
             $stock = $stmt->fetchColumn();
@@ -45,12 +42,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $stock = (int)$stock;
 
+        
             if ($form['tipo'] === 'salida' && $cantidad > $stock) {
-                throw new Exception("Stock insuficiente: hay $stock unidades disponibles.");
+                throw new Exception("Stock insuficiente: solo hay $stock unidades disponibles.");
             }
 
             $nuevo = $form['tipo'] === 'entrada' ? $stock + $cantidad : $stock - $cantidad;
 
+        
             $pdo->prepare('INSERT INTO movimiento (tipo, cantidad, observacion, id_producto, id_usuario)
                            VALUES (?, ?, ?, ?, ?)')
                 ->execute([
@@ -63,15 +62,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ->execute([$nuevo, $idProducto]);
 
             $pdo->commit();
-            $ok   = "Movimiento registrado. Nuevo stock: $nuevo.";
-            $form = $vacio;
-        } catch (Exception $e) {
+
+            avisar('ok', ($form['tipo'] === 'entrada' ? 'Entrada' : 'Salida')
+                . " registrada. El nuevo stock es $nuevo.");
+            header('Location: movimientos.php');  
+        } catch (Exception $ex) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
             }
-            $errores[] = ($e instanceof PDOException)
-                ? 'No se pudo registrar el movimiento.'
-                : $e->getMessage();
+            $errores[] = ($ex instanceof PDOException)
+                ? 'No se pudo registrar el movimiento. Inténtalo de nuevo.'
+                : $ex->getMessage();
         }
     }
 }
@@ -95,91 +96,111 @@ $historial = $pdo->query('SELECT m.fecha_hora, m.tipo, m.cantidad, m.observacion
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>TecnoStock - Movimientos</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="estilos.css">
 </head>
-<body class="bg-light">
-<div class="container py-4" style="max-width: 860px;">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-        <h1 class="h3 mb-0">Movimientos de stock</h1>
-        <a href="productos.php" class="btn btn-outline-secondary btn-sm">Volver a productos</a>
+<body>
+
+<?php $pagina = 'movimientos'; include 'barra.php'; ?>
+
+<main class="angosto">
+    <?php mostrar_aviso(); ?>
+
+    <div class="encabezado">
+        <div>
+            <h1>Movimientos de stock</h1>
+            <p class="resumen">Registra las entradas y salidas de productos.</p>
+        </div>
     </div>
 
-    <?php if ($ok): ?>
-        <div class="alert alert-success py-2"><?= htmlspecialchars($ok) ?></div>
+    <?php if ($errores): ?>
+        <div class="aviso error" role="alert">
+            <ul>
+                <?php foreach ($errores as $err): ?>
+                    <li><?= e($err) ?></li>
+                <?php endforeach; ?>
+            </ul>
+        </div>
     <?php endif; ?>
-    <?php foreach ($errores as $e): ?>
-        <div class="alert alert-danger py-2"><?= htmlspecialchars($e) ?></div>
-    <?php endforeach; ?>
 
-    <form method="post" id="formMov" class="card card-body mb-4" novalidate>
-        <div class="row g-3">
-            <div class="col-md-6">
-                <label class="form-label" for="id_producto">Producto</label>
-                <select class="form-select" id="id_producto" name="id_producto" required>
-                    <option value="">Selecciona…</option>
+    <form method="post" class="tarjeta" data-validar novalidate>
+        <div class="campos">
+            <div class="campo">
+                <label for="id_producto">Producto</label>
+                <select id="id_producto" name="id_producto" required>
+                    <option value="">Selecciona un producto…</option>
                     <?php foreach ($productos as $p): ?>
                         <option value="<?= (int)$p['id_producto'] ?>"
                             <?= $p['id_producto'] == $form['id_producto'] ? 'selected' : '' ?>>
-                            <?= htmlspecialchars($p['codigo'] . ' · ' . $p['nombre']) ?> (stock: <?= (int)$p['stock_actual'] ?>)
+                            <?= e($p['codigo'] . ' · ' . $p['nombre']) ?> (stock: <?= (int)$p['stock_actual'] ?>)
                         </option>
                     <?php endforeach; ?>
                 </select>
+                <span class="ayuda"></span>
             </div>
-            <div class="col-md-3">
-                <label class="form-label" for="tipo">Tipo</label>
-                <select class="form-select" id="tipo" name="tipo" required>
-                    <option value="entrada" <?= $form['tipo'] === 'entrada' ? 'selected' : '' ?>>Entrada</option>
-                    <option value="salida"  <?= $form['tipo'] === 'salida'  ? 'selected' : '' ?>>Salida</option>
+
+            <div class="campo m6">
+                <label for="tipo">Tipo de movimiento</label>
+                <select id="tipo" name="tipo" required>
+                    <option value="entrada" <?= $form['tipo'] === 'entrada' ? 'selected' : '' ?>>Entrada (suma stock)</option>
+                    <option value="salida"  <?= $form['tipo'] === 'salida'  ? 'selected' : '' ?>>Salida (resta stock)</option>
                 </select>
+                <span class="ayuda"></span>
             </div>
-            <div class="col-md-3">
-                <label class="form-label" for="cantidad">Cantidad</label>
-                <input type="number" class="form-control" id="cantidad" name="cantidad" min="1" step="1" required
-                       value="<?= htmlspecialchars($form['cantidad']) ?>">
+
+            <div class="campo m6">
+                <label for="cantidad">Cantidad</label>
+                <input type="number" id="cantidad" name="cantidad" min="1" step="1" required
+                       value="<?= e($form['cantidad']) ?>">
+                <span class="ayuda"></span>
             </div>
-            <div class="col-12">
-                <label class="form-label" for="observacion">Observación (opcional)</label>
-                <input type="text" class="form-control" id="observacion" name="observacion" maxlength="255"
-                       value="<?= htmlspecialchars($form['observacion']) ?>">
+
+            <div class="campo">
+                <label for="observacion">Observación (opcional)</label>
+                <input type="text" id="observacion" name="observacion" maxlength="255"
+                       value="<?= e($form['observacion']) ?>">
+                <span class="ayuda"></span>
             </div>
         </div>
-        <div class="mt-3">
-            <button type="submit" class="btn btn-primary">Registrar movimiento</button>
+
+        <div class="botones">
+            <button type="submit" class="boton">Registrar movimiento</button>
         </div>
     </form>
 
-    <h2 class="h5">Últimos movimientos</h2>
-    <table class="table table-sm table-striped bg-white">
-        <thead>
-            <tr><th>Fecha</th><th>Producto</th><th>Tipo</th><th>Cantidad</th><th>Usuario</th><th>Observación</th></tr>
-        </thead>
-        <tbody>
-        <?php foreach ($historial as $m): ?>
-            <tr>
-                <td><?= htmlspecialchars($m['fecha_hora']) ?></td>
-                <td><?= htmlspecialchars($m['producto']) ?></td>
-                <td><?= $m['tipo'] === 'entrada' ? 'Entrada' : 'Salida' ?></td>
-                <td><?= (int)$m['cantidad'] ?></td>
-                <td><?= htmlspecialchars($m['usuario']) ?></td>
-                <td><?= htmlspecialchars($m['observacion'] ?? '') ?></td>
-            </tr>
-        <?php endforeach; ?>
-        <?php if (!$historial): ?>
-            <tr><td colspan="6" class="text-muted">Aún no hay movimientos.</td></tr>
-        <?php endif; ?>
-        </tbody>
-    </table>
-</div>
+    <h2 class="subtitulo">Últimos movimientos</h2>
+    <div class="tabla-caja">
+        <table class="tabla">
+            <thead>
+                <tr>
+                    <th>Fecha</th><th>Producto</th><th>Tipo</th><th>Cantidad</th><th>Usuario</th><th>Observación</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($historial as $m): ?>
+                <tr>
+                    <td><?= e($m['fecha_hora']) ?></td>
+                    <td><?= e($m['producto']) ?></td>
+                    <td>
+                        <span class="etiqueta <?= e($m['tipo']) ?>">
+                            <?= $m['tipo'] === 'entrada' ? 'Entrada' : 'Salida' ?>
+                        </span>
+                    </td>
+                    <td><?= (int)$m['cantidad'] ?></td>
+                    <td><?= e($m['usuario']) ?></td>
+                    <td><?= e($m['observacion'] ?? '') ?></td>
+                </tr>
+            <?php endforeach; ?>
+            <?php if (!$historial): ?>
+                <tr><td colspan="6" class="vacio-fila">Aún no hay movimientos registrados.</td></tr>
+            <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+</main>
 
-<script>
-    // Validación en el navegador (se repite en PHP)
-    const form = document.getElementById('formMov');
-    form.addEventListener('submit', (e) => {
-        if (!form.checkValidity()) {
-            e.preventDefault();
-        }
-        form.classList.add('was-validated');
-    });
-</script>
+<script src="validar.js"></script>
 </body>
 </html>
