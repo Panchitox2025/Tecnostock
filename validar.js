@@ -1,11 +1,7 @@
-// Validación en el navegador para los formularios con el atributo data-validar.
-// Marca los campos inválidos, muestra el motivo y evita enviar el formulario.
-// Las mismas reglas se repiten en PHP, porque el servidor nunca debe confiar
-// solo en lo que valida el navegador.
 document.querySelectorAll('form[data-validar]').forEach((form) => {
     const campos = form.querySelectorAll('input, select, textarea');
 
-    // Mensajes en español, sin depender del idioma del navegador
+    
     const mensaje = (campo) => {
         const v = campo.validity;
         if (v.valueMissing) {
@@ -46,7 +42,7 @@ document.querySelectorAll('form[data-validar]').forEach((form) => {
         }
     });
 
-    // Quita el error apenas el usuario corrige el campo
+
     campos.forEach((campo) => {
         campo.addEventListener('input', () => {
             if (campo.classList.contains('invalido')) {
